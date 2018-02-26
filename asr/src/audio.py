@@ -44,7 +44,7 @@ def apply_pre_emphasis_to_signal(signal, pre_emphasis=0.97):
     A pre-emphasis filter amplifies high frequencies in a signal.
     Its equation:
 
-        y(t) = x(t) - a x(t-1)
+        y(t) = x(t) - a * x(t-1)
 
     where x is the signal and a is the pre_emphasis coefficient
     
@@ -195,7 +195,7 @@ def get_mfcc_coefficients_from_filter_banks(filter_banks, cep_lifter=22):
     Applies DCT to decorrelate the filter bank coefficients.
 
     Note:
-        For ASR, typically only cepstral coefficinets 2-13 are retained.
+        For ASR, typically only cepstral coefficients 2-13 are retained.
         For completeness, this isn't automatically filtered in this function.
 
     Args:

@@ -1,14 +1,72 @@
 # -*- coding: utf-8 *-* 
+"""LibriSpeech Folder Parsing Module
+
+This module is used for processing the files provided by LibriSpeech
+to be used in our models.
+
+The LibriSpeech folder structure (from LibriSpeech/README.txt):
+<corpus root>
+    |
+    .- README.TXT
+    |
+    .- READERS.TXT
+    |
+    .- CHAPTERS.TXT
+    |
+    .- BOOKS.TXT
+    |
+    .- train-clean-100/
+                   |
+                   .- 19/
+                       |
+                       .- 198/
+                       |    |
+                       |    .- 19-198.trans.txt
+                       |    |    
+                       |    .- 19-198-0001.flac
+                       |    |
+                       |    .- 14-208-0002.flac
+                       |    |
+                       |    ...
+                       |
+                       .- 227/
+                            | ...
+, where 19 is the ID of the reader, and 198 and 227 are the IDs of the chapters
+read by this speaker. The *.trans.txt files contain the transcripts for each
+of the utterances, derived from the respective chapter and the FLAC files contain
+the audio itself.
+
+Notes:
+    So far, we have only been working from the dev-clean folder.
+    It should work for all LibriSpeech folders, assuming their folder structures
+    are consistent.
+
+Todo:
+    * Test for other folders
+"""
+
 import os
 import numpy as np
 import re
 from audio import get_mfcc_from_file 
 
 def voice_txt_dict_from_path(folder_path):
+    """Creates a dictionary between voice ids and txt file paths
+
+    Walks through the provided LibriSpeech folder directory and 
+    creates a dictionary, with voice_id as a key and all associated text files
+
+    Args:
+        folder_path (str): The path to the LibriSpeech folder
+    
+    Returns:
+        dict : Keys are the voice_ids, values are lists of the paths to trans.txt files.
+
+    """
     voice_txt_dict = {}
 
     for dir_name, sub_directories, file_names in os.walk(folder_path):
-        if len(sub_directories) == 0: # this is a root 
+        if len(sub_directories) == 0: # this is a root directory
             file_names = list(map(lambda x: os.path.join(dir_name, x), file_names))
             txt_file = list(filter(lambda x: x.endswith('txt'), file_names))[0]
 
@@ -22,6 +80,19 @@ def voice_txt_dict_from_path(folder_path):
     return voice_txt_dict
 
 def transcriptions_and_flac(txt_file_path):
+    """Gets the transcriptions and .flac files from the path to a trans.txt file.
+
+    Given the path to a trans.txt file, this function will return a list of 
+    transcriptions and a list of the .flac files. Each flac file entry index corresponds 
+    to the transcription entry index.
+
+    Args:
+        txt_file_path (str): The path to a trans.txt file
+
+    Returns:
+        list : A list of transcriptions
+        list : A list of paths to .flac files
+    """
     transcriptions = []
     flac_files = []
 
@@ -39,6 +110,20 @@ def transcriptions_and_flac(txt_file_path):
     return transcriptions, flac_files 
 
 def get_data_from_path(folder_path):
+    """Gets the features, transcriptions, and ids from a folder path
+
+    Given the path to a LibriSpeech directory, get all MFCC features from
+    all .flac files, their associated speaker (voice_id), and the transcription
+
+    Args:
+        folder_path (str): The path to a LibriSpeech folder
+
+    Returns:
+        list : The MFCC features extracted from .flac files
+        list : The transcriptions from .trans.txt files
+        list : The voice ids
+
+    """
     voice_txt_dict = voice_txt_dict_from_path(folder_path)
 
     features = []
@@ -53,15 +138,43 @@ def get_data_from_path(folder_path):
             transcriptions += t
 
             for flac_file in flac_files:
-                features.append(get_mfcc_from_file(flac_file))
+                features.append(get_mfcc_from_file(flac_file)[:, 1:12]) # Save only cepstral coefficients 2-13
                 ids.append(voice_id)
     return features, transcriptions, ids
 
-if __name__ == "__main__":
-    #file_path = "../data/LibriSpeech/dev-clean/2277/149896/2277-149896.trans.txt"
-    folder_path = "../data/LibriSpeech"
-    features, transcriptions, ids = get_data_from_path(folder_path)
+def save_data(data, folder_path, file_names=['features', 'transcriptions', 'ids']):
+    """Given data, save to numpy arrays
 
-    np.save('../data/features.npy', np.dstack(features))
-    np.save('../data/transcriptions.npy', np.array(transcriptions))
-    np.save('../data/ids.npy', np.array(ids))
+    Given a list of features, transcriptions, and ids, save each to numpy files.
+
+    Args:
+        data (tuple): A tuple of 3 lists - features, transcriptions, ids.
+        folder_path (str): The full path destination to save to
+        file_names (:obj:`list`, optional): A list of names for each file,
+            in order of features, transcriptions, ids.
+            Defaults to ['features','transcriptions','ids']
+
+    """
+    features, transcriptions, ids = data
+
+    # First 0-pad the features.
+    max_feature_length = max(feature.shape[0] for feature in features)
+    padded_features = []
+    for feature in features:
+        pad_length = max_feature_length - feature.shape[0]
+        padded = np.pad(feature, ((0, pad_length), (0,0)), 'constant')
+        padded_features.append(padded)
+
+    padded_features = np.dstack(padded_features)
+    transcriptions = np.array(transcriptions)
+    ids = np.array(ids)
+
+    np.save(os.path.join(folder_path, "{0}.npy".format(file_names[0])), padded_features)
+    np.save(os.path.join(folder_path, "{0}.npy".format(file_names[1])), transcriptions)
+    np.save(os.path.join(folder_path, "{0}.npy".format(file_names[2])), ids)
+
+
+if __name__ == "__main__":
+    folder_path = "../data/LibriSpeech"
+    data = get_data_from_path(folder_path)
+    save_data(data, '../data/LibriSpeech')
