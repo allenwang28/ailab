@@ -50,7 +50,9 @@ import numpy as np
 import re
 from audio import get_mfcc_from_file 
 
-def voice_txt_dict_from_path(folder_path):
+from datasource import DataSource
+
+def _voice_txt_dict_from_path(folder_path):
     """Creates a dictionary between voice ids and txt file paths
 
     Walks through the provided LibriSpeech folder directory and 
@@ -79,7 +81,7 @@ def voice_txt_dict_from_path(folder_path):
 
     return voice_txt_dict
 
-def transcriptions_and_flac(txt_file_path):
+def _transcriptions_and_flac(txt_file_path):
     """Gets the transcriptions and .flac files from the path to a trans.txt file.
 
     Given the path to a trans.txt file, this function will return a list of 
@@ -109,7 +111,7 @@ def transcriptions_and_flac(txt_file_path):
  
     return transcriptions, flac_files 
 
-def get_data_from_path(folder_path):
+def _get_data_from_path(folder_path):
     """Gets the features, transcriptions, and ids from a folder path
 
     Given the path to a LibriSpeech directory, get all MFCC features from
@@ -142,7 +144,7 @@ def get_data_from_path(folder_path):
                 ids.append(voice_id)
     return features, transcriptions, ids
 
-def save_data(data, folder_path, file_names=['features', 'transcriptions', 'ids']):
+def _save_data(data, folder_path, file_names=['features', 'transcriptions', 'ids']):
     """Given data, save to numpy arrays
 
     Given a list of features, transcriptions, and ids, save each to numpy files.
@@ -173,70 +175,101 @@ def save_data(data, folder_path, file_names=['features', 'transcriptions', 'ids'
     np.save(os.path.join(folder_path, "{0}.npy".format(file_names[1])), transcriptions)
     np.save(os.path.join(folder_path, "{0}.npy".format(file_names[2])), ids)
 
-def mfcc_batch_generator(batch_size, max_time_steps, max_text_length, folder_paths = [], label = 'transcription'):
-    """Given folder paths, return a mfcc batch generator
+class LibriSpeechData:
+    def __init__(self, 
+                 feature, 
+                 label,
+                 max_time_steps, 
+                 batch_size, 
+                 folder_paths = []):
+        """LibriSpeechData class initializer
 
-    Saving all of the mfcc features from .flac files may be overkill.
-    Use this to retrieve data in batches.
+        Args:
+            feature (str): The name of the feature you want.
+                Accepted values: 'mfcc',
+                                 'power_bank'
+            label ()
+            max_time_steps (int): The maximum amount of time steps/windows
+                accepted for features. Features will be truncated or
+                zero-padded.
+            max_text_length (int): The maximum length of text in transcriptions.
 
-    Args:
-        batch_size (int): The size of a batch
-        max_time_steps (int): maximum time steps for input features
-        max_text_length (int): maximum sequence length for transcription
-        folder_paths (:opt:`list`, optional): A list of LibriSpeech folder paths (strings)
-            Defaults to an empty list.
-        label (:opt:`str`, optional): The label. Possible values:
-            - 'voice_id': specifies the speaker
-            - 'transcription': the text sequence 
-            Defaults to transcription.
+        Returns:
 
-    Returns:
-        generator : batch generator of mfcc features and labels
 
-    Raises:
-        Exception : If invalid label provided.
-    """
-    for folder_path in folder_paths:
-        voice_txt_dict = voice_txt_dict_from_path(folder_path)
+        Raises:
+            ValueError : If an invalid feature is provided
 
-        features = []
-        transcriptions = []
-        ids = []
+        """
+        self.feature = feature
+        self.max_time_steps = max_time_steps
+        self.max_text_length = max_text_length
+        self.folder_paths = folder_paths
 
-        for voice_id in voice_txt_dict:
-            txt_files = voice_txt_dict[voice_id]
-            for txt_file in txt_files:
-                t, flac_files = transcriptions_and_flac(txt_file)
+    def batch_generator(batch_size, max_time_steps, max_text_length, folder_paths = [], label = 'transcription'):
+        """Given folder paths, return a mfcc batch generator
 
-                for flac_file, transcription in zip(flac_files, t):
-                    mfcc = get_mfcc_from_file(flac_file)[:, 1:12] # Save only cepstral coefficients 2-13
-                    if len(mfcc) < max_time_steps:
-                        # zero-pad 
-                        pad_length = max_time_steps - len(mfcc)
-                        mfcc = np.pad(mfcc, ((0, pad_length), (0,0)), 'constant')
-                    elif len(mfcc) > max_time_steps:
-                        mfcc = mfcc[:max_time_steps]
-                    features.append(mfcc)
-                    ids.append(voice_id)
+        Saving all of the mfcc features from .flac files may be overkill.
+        Use this to retrieve data in batches.
+
+        Args:
+            batch_size (int): The size of a batch
+            max_time_steps (int): maximum time steps for input features
+            max_text_length (int): maximum sequence length for transcription
+            folder_paths (:opt:`list`, optional): A list of LibriSpeech folder paths (strings)
+                Defaults to an empty list.
+            label (:opt:`str`, optional): The label. Possible values:
+                - 'voice_id': specifies the speaker
+                - 'transcription': the text sequence 
+                Defaults to transcription.
+
+        Returns:
+            generator : batch generator of mfcc features and labels
+
+        Raises:
+            Exception : If invalid label provided.
+        """
+        for folder_path in folder_paths:
+            voice_txt_dict = voice_txt_dict_from_path(folder_path)
+
+            features = []
+            transcriptions = []
+            ids = []
+
+            for voice_id in voice_txt_dict:
+                txt_files = voice_txt_dict[voice_id]
+                for txt_file in txt_files:
+                    t, flac_files = transcriptions_and_flac(txt_file)
+
+                    for flac_file, transcription in zip(flac_files, t):
+                        mfcc = get_mfcc_from_file(flac_file)[:, 1:12] # Save only cepstral coefficients 2-13
+                        if len(mfcc) < max_time_steps:
+                            # zero-pad 
+                            pad_length = max_time_steps - len(mfcc)
+                            mfcc = np.pad(mfcc, ((0, pad_length), (0,0)), 'constant')
+                        elif len(mfcc) > max_time_steps:
+                            mfcc = mfcc[:max_time_steps]
+                        features.append(mfcc)
+                        ids.append(voice_id)
+                        
+                        transcription_tokens = re.split("\s", transcription)
+                        if len(transcription_tokens) < max_text_length:
+                            pad_length = max_text_length - len(transcription_tokens)
+                            transcription_tokens += [''] * pad_length
+                        elif len(transcription_tokens) > max_text_length:
+                            transcription_tokens = transcription_tokens[:max_text_length]
+                        transcriptions.append(transcription_tokens)
                     
-                    transcription_tokens = re.split("\s", transcription)
-                    if len(transcription_tokens) < max_text_length:
-                        pad_length = max_text_length - len(transcription_tokens)
-                        transcription_tokens += [''] * pad_length
-                    elif len(transcription_tokens) > max_text_length:
-                        transcription_tokens = transcription_tokens[:max_text_length]
-                    transcriptions.append(transcription_tokens)
-                
-                    if len(features) >= batch_size:
-                        if label.lower() == 'transcription':
-                            yield features, transcriptions
-                        elif label.lower() == 'voice_id':
-                            yield features, ids
-                        else:
-                            raise Exception('Invalid label')
-                        features = []
-                        transcriptions = []
-                        ids = []
+                        if len(features) >= batch_size:
+                            if label.lower() == 'transcription':
+                                yield features, transcriptions
+                            elif label.lower() == 'voice_id':
+                                yield features, ids
+                            else:
+                                raise Exception('Invalid label')
+                            features = []
+                            transcriptions = []
+                            ids = []
 
 if __name__ == "__main__":
     folder_path = "../data/LibriSpeech"
