@@ -173,8 +173,67 @@ def save_data(data, folder_path, file_names=['features', 'transcriptions', 'ids'
     np.save(os.path.join(folder_path, "{0}.npy".format(file_names[1])), transcriptions)
     np.save(os.path.join(folder_path, "{0}.npy".format(file_names[2])), ids)
 
+def mfcc_batch_generator(batch_size, folder_paths = [], label = 'transcription'):
+    """Given folder paths, return a mfcc batch generator
+
+    Saving all of the mfcc features from .flac files may be overkill.
+    Use this to retrieve data in batches.
+
+    Args:
+        batch_size (int): The size of a batch
+        folder_paths (:opt:`list`, optional): A list of LibriSpeech folder paths (strings)
+            Defaults to an empty list.
+        label (:opt:`str`, optional): The label. Possible values:
+            - 'voice_id': specifies the speaker
+            - 'transcription': the text sequence 
+            Defaults to transcription.
+
+    Returns:
+        generator : batch generator of mfcc features and labels
+
+    Raises:
+        Exception : If invalid label provided.
+    """
+    for folder_path in folder_paths:
+        voice_txt_dict = voice_txt_dict_from_path(folder_path)
+
+        features = []
+        transcriptions = []
+        ids = []
+
+        for voice_id in voice_txt_dict:
+            txt_files = voice_txt_dict[voice_id]
+            for txt_file in txt_files:
+                t, flac_files = transcriptions_and_flac(txt_file)
+
+                for flac_file, transcription in zip(flac_files, t):
+                    features.append(get_mfcc_from_file(flac_file)[:, 1:12]) # Save only cepstral coefficients 2-13
+                    ids.append(voice_id)
+                    transcriptions.append(transcription)
+                
+                    if len(features) >= batch_size:
+                        print ("Reset!")
+                        if label.lower() == 'transcription':
+                            yield features, transcriptions
+                        elif label.lower() == 'voice_id':
+                            yield features, ids
+                        else:
+                            raise Exception('Invalid label')
+                        features = []
+                        transcriptions = []
+                        ids = []
 
 if __name__ == "__main__":
     folder_path = "../data/LibriSpeech"
-    data = get_data_from_path(folder_path)
-    save_data(data, '../data/LibriSpeech')
+    #data = get_data_from_path(folder_path)
+    #save_data(data, '../data/LibriSpeech')
+    
+    batch = mfcc_batch_generator(1, [folder_path])
+    feature, transcription = next(batch)
+
+    print (feature, transcription)
+    print (len(feature))
+    print (len(transcription))
+    print (feature[0].shape)
+
+
