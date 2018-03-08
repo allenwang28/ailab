@@ -148,7 +148,7 @@ def mel_to_frequency(m):
     """Convert from mel-scale to frequency (Hz)"""
     return 700 * (10**(m / 2595) - 1)
 
-def get_filter_banks_from_power_spectrum(power_spectrum, NFFT, samplerate, num_filters=26):
+def get_filter_banks_from_power_spectrum(power_spectrum, NFFT, samplerate, num_filters=40):
     """Get filter banks from the power spectrum
 
     Args:
@@ -157,7 +157,7 @@ def get_filter_banks_from_power_spectrum(power_spectrum, NFFT, samplerate, num_f
         NFFT (int): the NFFT used for extracting the power spectrum
         samplerate (int): the sample rate of the signal.
         num_filters (:obj:`int`, optional) : desired number of filters in the filter bank
-            Defaults to 26.
+            Defaults to 40.
     
     Returns:
         np.array : extracted filter banks
@@ -276,6 +276,31 @@ def get_mfcc_from_file(file_path):
     filter_banks = get_filter_banks_from_power_spectrum(power_spectrum, NFFT, samplerate)
     mfcc = get_mfcc_coefficients_from_filter_banks(filter_banks)
     return mean_normalize(mfcc)
+
+def get_banks_and_mfcc_from_file(file_path):
+    """Get the filter banks and MFCC from an audio file.
+
+    Extracts filter banks and MFCC features using typical ASR parameters.
+
+    Args:
+        file_path (str): path to the file
+
+    Returns:
+        np.array : normalized filter bank
+        np.array : normalized MFCC
+
+    """
+    NFFT = 512
+
+    signal, samplerate = get_file_data(file_path)
+    signal = apply_pre_emphasis_to_signal(signal)
+
+    frames = extract_frames_from_signal(signal, samplerate, window_function=np.hamming)
+    power_spectrum = get_power_spectrum_from_frames(frames, NFFT)
+
+    filter_banks = get_filter_banks_from_power_spectrum(power_spectrum, NFFT, samplerate)
+    mfcc = get_mfcc_coefficients_from_filter_banks(filter_banks)
+    return mean_normalize(filter_banks), mean_normalize(mfcc)
 
 # Code to test this module
 if __name__ == "__main__":
