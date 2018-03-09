@@ -42,16 +42,28 @@ Notes:
     are consistent.
 
 Todo:
+    * Options for specifying which cepstral coefficients
     * Test for other folders
+    * Add other ways to specify sequences (right now, only characters are supported)
+    * Find a better way to prepare data for tensorflow...
 """
 
 import os
 import numpy as np
 import re
-from audio import get_mfcc_from_file 
+import tensorflow as tf
 
-from datasource import DataSource
+from audio import get_mfcc_from_file
+from audio import get_filterbank_from_file
 
+NUM_CHAR_FEATURES = 27 # 26 letters + 1 space + 1 EOF (represented as 0s)
+
+ACCEPTED_FEATURES = ['mfcc', 
+                    'power_bank']
+ACCEPTED_LABELS =   ['transcription_chars',
+                     'voice_id']
+
+ohe = 
 def _voice_txt_dict_from_path(folder_path):
     """Creates a dictionary between voice ids and txt file paths
 
@@ -175,108 +187,127 @@ def _save_data(data, folder_path, file_names=['features', 'transcriptions', 'ids
     np.save(os.path.join(folder_path, "{0}.npy".format(file_names[1])), transcriptions)
     np.save(os.path.join(folder_path, "{0}.npy".format(file_names[2])), ids)
 
+
 class LibriSpeechData:
     def __init__(self, 
-                 feature, 
+                 feature,
+                 num_features,
                  label,
-                 max_time_steps, 
                  batch_size, 
-                 folder_paths = []):
+                 max_time_steps,
+                 max_output_length,
+                 folder_paths):
         """LibriSpeechData class initializer
 
         Args:
             feature (str): The name of the feature you want.
-                Accepted values: 'mfcc',
-                                 'power_bank'
-            label ()
+            num_features (int): The number of features you want.
+                For instance, if using mfcc, then you may only want 13 cepstral coefficients.
+            label (str): The name of the label you want.
+            batch_size (int): The size of a batch to be generated. Must be > 0
             max_time_steps (int): The maximum amount of time steps/windows
                 accepted for features. Features will be truncated or
                 zero-padded.
-            max_text_length (int): The maximum length of text in transcriptions.
-
-        Returns:
-
+            max_output_length (int): The maximum length of output sequences.
+                If label is voice_id, provide None.
+            folder_paths (list of str): All folder paths to use.
 
         Raises:
-            ValueError : If an invalid feature is provided
+            ValueError : If an invalid value for feature is provided
+            ValueError : If an invalid value for label is provided
 
         """
-        self.feature = feature
-        self.max_time_steps = max_time_steps
-        self.max_text_length = max_text_length
-        self.folder_paths = folder_paths
+        feature = feature.lower()
+        label = label.lower()
 
-    def batch_generator(batch_size, max_time_steps, max_text_length, folder_paths = [], label = 'transcription'):
-        """Given folder paths, return a mfcc batch generator
+        if feature not in ACCEPTED_FEATURES:
+            raise ValueError('Invalid feature')
+        if label not in ACCEPTED_LABELS:
+            raise ValueError('Invalid label')
 
-        Saving all of the mfcc features from .flac files may be overkill.
-        Use this to retrieve data in batches.
+        self._feature = feature
+        self._label = label
+        self._folder_paths = folder_paths
+
+        self._batch_size = batch_size
+        self._num_features = num_features
+        self._max_input_length = max_time_steps
+        self._max_output_length = max_output_length
+
+        self.input_shape = (batch_size, num_features, max_time_steps)
+        self.output_shape = (batch_size, NUM_CHAR_FEATURES, max_output_length)
+
+    def _prepare_for_tf(self, inputs, outputs):
+        if self._label == 'transcription_chars':
+            # One hot encode the inputs
+
+        return
+
+    def batch_generator(self, tf=False):
+        """Create a batch generator
 
         Args:
-            batch_size (int): The size of a batch
-            max_time_steps (int): maximum time steps for input features
-            max_text_length (int): maximum sequence length for transcription
-            folder_paths (:opt:`list`, optional): A list of LibriSpeech folder paths (strings)
-                Defaults to an empty list.
-            label (:opt:`str`, optional): The label. Possible values:
-                - 'voice_id': specifies the speaker
-                - 'transcription': the text sequence 
-                Defaults to transcription.
+            tf (:obj:`bool`, optional): Whether to yield formatted for tensorflow
 
         Returns:
             generator : batch generator of mfcc features and labels
-
-        Raises:
-            Exception : If invalid label provided.
         """
-        for folder_path in folder_paths:
-            voice_txt_dict = voice_txt_dict_from_path(folder_path)
+        for folder_path in self._folder_paths:
+            voice_txt_dict = _voice_txt_dict_from_path(folder_path)
 
-            features = []
-            transcriptions = []
-            ids = []
+            inputs = []
+            outputs = []
 
             for voice_id in voice_txt_dict:
                 txt_files = voice_txt_dict[voice_id]
                 for txt_file in txt_files:
-                    t, flac_files = transcriptions_and_flac(txt_file)
+                    transcriptions, flac_files = _transcriptions_and_flac(txt_file)
+                    for transcription, flac_file in zip(transcriptions, flac_files):
+                        # Process feature
+                        if self._feature == 'mfcc':
+                            feature = get_mfcc_from_file(flac_file)[:, 1:self._num_features]
+                        elif self._feature == 'power_bank':
+                            feature = get_filterbank_from_file(flac_file)[:, :self._num_features]
+                        else:
+                            raise ValueError('Invalid feature')
 
-                    for flac_file, transcription in zip(flac_files, t):
-                        mfcc = get_mfcc_from_file(flac_file)[:, 1:12] # Save only cepstral coefficients 2-13
-                        if len(mfcc) < max_time_steps:
+                        if len(feature) < self._max_input_length:
                             # zero-pad 
-                            pad_length = max_time_steps - len(mfcc)
-                            mfcc = np.pad(mfcc, ((0, pad_length), (0,0)), 'constant')
-                        elif len(mfcc) > max_time_steps:
-                            mfcc = mfcc[:max_time_steps]
-                        features.append(mfcc)
-                        ids.append(voice_id)
-                        
-                        transcription_tokens = re.split("\s", transcription)
-                        if len(transcription_tokens) < max_text_length:
-                            pad_length = max_text_length - len(transcription_tokens)
-                            transcription_tokens += [''] * pad_length
-                        elif len(transcription_tokens) > max_text_length:
-                            transcription_tokens = transcription_tokens[:max_text_length]
-                        transcriptions.append(transcription_tokens)
-                    
-                        if len(features) >= batch_size:
-                            if label.lower() == 'transcription':
-                                yield features, transcriptions
-                            elif label.lower() == 'voice_id':
-                                yield features, ids
-                            else:
-                                raise Exception('Invalid label')
-                            features = []
-                            transcriptions = []
-                            ids = []
+                            pad_length = self._max_input_length - len(feature)
+                            feature = np.pad(feature, ((0, pad_length), (0,0)), 'constant')
+                        elif len(feature) > self._max_input_length:
+                            feature = feature[:self._max_input_length]
+                        inputs.append(feature)
+
+                        # Process output
+                        if self._label == 'transcription_chars':
+                            transcription_tokens = list(transcription.lower())
+                            if len(transcription_tokens) < self._max_output_length:
+                                pad_length = self._max_output_length - len(transcription_tokens)
+                                transcription_tokens += ['0'] * pad_length
+                            elif len(transcription_tokens) > self._max_output_length:
+                                transcription_tokens = transcription_tokens[:self._max_output_length]
+                            outputs.append("".join(transcription_tokens))
+                        elif self._label == 'voice_id':
+                            outputs.append(voice_id)
+                        else:
+                            raise ValueError('Invalid label')
+                   
+                        if len(inputs) >= self._batch_size:
+                            if tf:
+                                inputs, outputs = self._prepare_for_tf(inputs, outputs)
+                            yield inputs, outputs
+
+                            inputs = []
+                            outputs = []
 
 if __name__ == "__main__":
     folder_path = "../data/LibriSpeech"
     #data = get_data_from_path(folder_path)
     #save_data(data, '../data/LibriSpeech')
+    libri = LibriSpeechData('mfcc', 12, 'transcription_chars', 10, 150, 100, ['../../data/LibriSpeech'])
     
-    batch = mfcc_batch_generator(1, 100, 50, [folder_path])
+    batch = libri.batch_generator()
     feature, transcription = next(batch)
 
     print (feature, transcription)
