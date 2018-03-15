@@ -3,27 +3,55 @@
 """
 
 import abc
-import tensorflow as tf
-from tf_decorate import define_scope
-import tf_util
+from abc import ABC, abstractmethod
 
-class TensorflowModel(object):
+import tensorflow as tf
+from models.tf_decorate import define_scope
+import models.tf_util
+import time
+import os
+
+
+class TensorflowModel(ABC):
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, input_shape, output_shape):
-        self.input_shape = input_shape
-        self.output_shape = output_shape
+    @property
+    def save_dir(self):
+        return os.path.join(SAVE_DIR_BASE, self.name)
 
-        self.predict
-        self.optimize
-        self.error
+    def __init__(self, data_source, save_dir, training=True, reset=True):
+        self._data_source = data_source
+        self._max_output_length = data_source.max_output_length
+        self._max_input_length = data_source.max_input_length
+        self._batch_size = data_source.batch_size
+        self._num_features = data_source.num_features
+        self._num_output_features = data_source.num_output_features
+        self._training = training
+        self._reset = reset
+        self._save_dir = save_dir
 
-    @abc.abstractmethod
-    def construct_model(self):
-        raise NotImplementedError('construct the model here')
 
-    def fit(self):
-        pass
+    def train(self, num_epochs):
+        self.build_graph()
+        batch_gen = self._data_source.batch_generator(tf=True, randomize=True)
+        with tf.Session(graph=self._graph) as sess:
+            if reset:
+                print ('Initializing model')
+                sess.run(self._initial_op)
+            else:
+                ckpt = tf.train.get_checkpoint_state(self._save_dir)
+
+            for epoch in range(num_epochs):
+                start = time.time()
+                print ("Epoch: {0}".format(epoch))
+
+                for batch in batch_gen:
+                    inputs, outputs = batch
+
+                    feed_dict = {self._input_tensor : inputs,
+                                 self._output_tensor : outputs}
+            
+                    _, l, pred, y, err = sess.run([self._optimizer, ])
 
     def predict(self):
         pass
@@ -31,15 +59,41 @@ class TensorflowModel(object):
     def predict_sample(self):
         pass
 
-    @define_scope(initializer=tf.contrib.xavier_initializer())
-    def build_graph(self):
-
-    @abc.abstractmethod
     @define_scope()
-    def optimize(self):
+    def build_graph(self):
+        self._graph = tf.Graph()
+        with self.graph.as_default():
+            # Specify the input 
+            self._input_tensor = tf.placeholder(tf.float32,
+                                               shape=self._data_source.input_shape)
+
+            # Construct the model
+            self._output_node = self._construct()
+
+            self._target_tensor = tf.placeholder(tf.float32,
+                                                 shape=self._data_source.output_shape)
+
+            self._var_trainable_op = tf.trainable_variables()
+
+            # Specify loss function
+            self._loss = self._loss()
+
+            # Specify optimizer 
+            self._optimizer = self._optimize()
+
+            self._initial_op = tf.contrib.layers.xavier_initializer()
+
+            self._predictions = tf.argmax(inputs=self._output_node, axis=1)
+
+    @abstractmethod
+    def _construct(self, tf_in):
+        raise NotImplementedError('construct the model here')
+
+    @abstractmethod
+    def _optimize(self):
         raise NotImplementedError('specify the optimizer here')
 
-    @abc.abstractmethod
-    @define_scope()
-    def error(self):
-        raise NotImplementedError('specify error function here')
+    @abstractmethod
+    def _loss(self):
+        raise NotImplementedError('specify loss function here')
+

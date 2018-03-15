@@ -45,7 +45,8 @@ Todo:
     * Options for specifying which cepstral coefficients
     * Test for other folders
     * Add other ways to specify sequences (right now, only characters are supported)
-    * Find a better way to prepare data for tensorflow...
+    * Find a better way to prepare data for tensorflow
+    * Find a way to shuffle the data from the batch generator
 """
 
 import os
@@ -53,17 +54,17 @@ import numpy as np
 import re
 import tensorflow as tf
 
-from audio import get_mfcc_from_file
-from audio import get_filterbank_from_file
+from data.audio import get_mfcc_from_file
+from data.audio import get_filterbank_from_file
+import data.data_util
 
-NUM_CHAR_FEATURES = 27 # 26 letters + 1 space + 1 EOF (represented as 0s)
+NUM_CHAR_FEATURES = 28 # 26 letters + 1 space + 1 EOF (represented as 0s)
 
 ACCEPTED_FEATURES = ['mfcc', 
                     'power_bank']
 ACCEPTED_LABELS =   ['transcription_chars',
                      'voice_id']
 
-ohe = 
 def _voice_txt_dict_from_path(folder_path):
     """Creates a dictionary between voice ids and txt file paths
 
@@ -229,25 +230,43 @@ class LibriSpeechData:
         self._label = label
         self._folder_paths = folder_paths
 
-        self._batch_size = batch_size
-        self._num_features = num_features
-        self._max_input_length = max_time_steps
-        self._max_output_length = max_output_length
+        self.batch_size = batch_size
+        self.num_features = num_features
+        self.max_input_length = max_time_steps
+        self.num_output_features = NUM_CHAR_FEATURES
+        self.max_output_length = max_output_length
 
-        self.input_shape = (batch_size, num_features, max_time_steps)
+        # 1 input channel
+        self.input_shape = (batch_size, num_features, max_time_steps, 1) 
         self.output_shape = (batch_size, NUM_CHAR_FEATURES, max_output_length)
 
     def _prepare_for_tf(self, inputs, outputs):
+        """Prepare inputs and outputs for tensorflow
+
+        Convert transcribed characters to a one hot encoded format
+
+        Args:
+            inputs (list of numpy arrays): features
+            outputs (list of strings): Transcriptions
+        
+        Returns:
+            np.array : tensorized inputs
+            np.array : tensorized outputs
+
+        """
+        inputs = np.array(inputs)
         if self._label == 'transcription_chars':
-            # One hot encode the inputs
+            # One hot encode the outputs 
+            outputs = data_util.str_to_one_hot(outputs, self.max_output_length)
+        outputs = np.array(outputs)
+        return inputs, outputs
 
-        return
-
-    def batch_generator(self, tf=False):
+    def batch_generator(self, tf=False, randomize=True):
         """Create a batch generator
 
         Args:
             tf (:obj:`bool`, optional): Whether to yield formatted for tensorflow
+            randomize (:obj:`bool`, optional): Whether to randomize 
 
         Returns:
             generator : batch generator of mfcc features and labels
@@ -265,35 +284,38 @@ class LibriSpeechData:
                     for transcription, flac_file in zip(transcriptions, flac_files):
                         # Process feature
                         if self._feature == 'mfcc':
-                            feature = get_mfcc_from_file(flac_file)[:, 1:self._num_features]
+                            feature = get_mfcc_from_file(flac_file)[:, 1:self.num_features]
                         elif self._feature == 'power_bank':
-                            feature = get_filterbank_from_file(flac_file)[:, :self._num_features]
+                            feature = get_filterbank_from_file(flac_file)[:, :self.num_features]
                         else:
                             raise ValueError('Invalid feature')
 
-                        if len(feature) < self._max_input_length:
+                        if len(feature) < self.max_input_length:
                             # zero-pad 
-                            pad_length = self._max_input_length - len(feature)
+                            pad_length = self.max_input_length - len(feature)
                             feature = np.pad(feature, ((0, pad_length), (0,0)), 'constant')
-                        elif len(feature) > self._max_input_length:
-                            feature = feature[:self._max_input_length]
+                        elif len(feature) > self.max_input_length:
+                            feature = feature[:self.max_input_length]
                         inputs.append(feature)
 
                         # Process output
                         if self._label == 'transcription_chars':
-                            transcription_tokens = list(transcription.lower())
-                            if len(transcription_tokens) < self._max_output_length:
-                                pad_length = self._max_output_length - len(transcription_tokens)
+                            # Lower case the transcription and keep only letters and spaces
+                            transcription = transcription.lower()
+                            transcription = re.sub(r'[^a-z ]+', '', transcription)
+                            transcription_tokens = list(transcription)
+                            if len(transcription_tokens) < self.max_output_length:
+                                pad_length = self.max_output_length - len(transcription_tokens)
                                 transcription_tokens += ['0'] * pad_length
-                            elif len(transcription_tokens) > self._max_output_length:
-                                transcription_tokens = transcription_tokens[:self._max_output_length]
+                            elif len(transcription_tokens) > self.max_output_length:
+                                transcription_tokens = transcription_tokens[:self.max_output_length]
                             outputs.append("".join(transcription_tokens))
                         elif self._label == 'voice_id':
                             outputs.append(voice_id)
                         else:
                             raise ValueError('Invalid label')
                    
-                        if len(inputs) >= self._batch_size:
+                        if len(inputs) >= self.batch_size:
                             if tf:
                                 inputs, outputs = self._prepare_for_tf(inputs, outputs)
                             yield inputs, outputs
@@ -301,16 +323,14 @@ class LibriSpeechData:
                             inputs = []
                             outputs = []
 
+"""
 if __name__ == "__main__":
     folder_path = "../data/LibriSpeech"
-    #data = get_data_from_path(folder_path)
-    #save_data(data, '../data/LibriSpeech')
     libri = LibriSpeechData('mfcc', 12, 'transcription_chars', 10, 150, 100, ['../../data/LibriSpeech'])
-    
-    batch = libri.batch_generator()
+ 
+    batch = libri.batch_generator(tf=True)
     feature, transcription = next(batch)
 
     print (feature, transcription)
-    print (feature[0].shape)
-
-
+    print (data_util.one_hot_to_str(transcription))
+"""
