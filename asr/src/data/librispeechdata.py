@@ -47,11 +47,16 @@ Todo:
     * Add other ways to specify sequences (right now, only characters are supported)
     * Find a better way to prepare data for tensorflow
     * Find a way to shuffle the data from the batch generator
+    * Probably move downloading functionality into its own file once we support
+      more than just LibriSpeech
 """
 
 import os
 import numpy as np
 import re
+import urllib
+import tarfile
+
 import tensorflow as tf
 
 from data.audio import get_mfcc_from_file
@@ -64,6 +69,8 @@ ACCEPTED_FEATURES = ['mfcc',
                     'power_bank']
 ACCEPTED_LABELS =   ['transcription_chars',
                      'voice_id']
+
+LIBRISPEECH_URL_BASE = "www.openslr.org/resources/12/{0}.tar.gz"
 
 def _voice_txt_dict_from_path(folder_path):
     """Creates a dictionary between voice ids and txt file paths
@@ -135,13 +142,15 @@ def _get_data_from_path(folder_path):
 
     Returns:
         list : The MFCC features extracted from .flac files
+        list : The powerbank features extracted from .flac files
         list : The transcriptions from .trans.txt files
         list : The voice ids
 
     """
     voice_txt_dict = voice_txt_dict_from_path(folder_path)
 
-    features = []
+    mfccs = []
+    power_banks = []
     transcriptions = []
     ids = []
 
@@ -153,41 +162,84 @@ def _get_data_from_path(folder_path):
             transcriptions += t
 
             for flac_file in flac_files:
-                features.append(get_mfcc_from_file(flac_file)[:, 1:12]) # Save only cepstral coefficients 2-13
+                mfccs.append(get_mfcc_from_file(flac_file))
+                power_banks.append(get_filterbank_from_file(flac_file))
                 ids.append(voice_id)
-    return features, transcriptions, ids
+    return mfccs, power_banks, transcriptions, ids
 
-def _save_data(data, folder_path, file_names=['features', 'transcriptions', 'ids']):
+def _save_data(data, saved_file_paths):
     """Given data, save to numpy arrays
 
     Given a list of features, transcriptions, and ids, save each to numpy files.
 
     Args:
-        data (tuple): A tuple of 3 lists - features, transcriptions, ids.
-        folder_path (str): The full path destination to save to
-        file_names (:obj:`list`, optional): A list of names for each file,
-            in order of features, transcriptions, ids.
-            Defaults to ['features','transcriptions','ids']
+        data (tuple): A tuple of 4 lists - mfccs, power_banks, transcriptions, ids.
+        saved_file_paths (list of strings): Location to save files to 
+        
+    Returns:
 
+        list of strings: Locations of all the files saved
     """
-    features, transcriptions, ids = data
+    mfccs, power_banks, transcriptions, ids = data
+    saved_file_paths = [os.path.join(folder_path, "{0}.npy".format(file_name) for file_name in file_names]
 
     # First 0-pad the features.
-    max_feature_length = max(feature.shape[0] for feature in features)
-    padded_features = []
-    for feature in features:
-        pad_length = max_feature_length - feature.shape[0]
-        padded = np.pad(feature, ((0, pad_length), (0,0)), 'constant')
-        padded_features.append(padded)
+    for i, features in enumerate([mfccs, power_banks]):
+        max_feature_length = max(feature.shape[0] for feature in features)
+        padded_features = []
+        for feature in features:
+            pad_length = max_feature_length - feature.shape[0]
+            padded = np.pad(feature, ((0, pad_length), (0,0)), 'constant')
+            padded_features.append(padded)
 
-    padded_features = np.dstack(padded_features)
+        padded_features = np.dstack(padded_features)
+       
+        np.save(saved_file_paths[i], padded_features)
+
     transcriptions = np.array(transcriptions)
     ids = np.array(ids)
 
-    np.save(os.path.join(folder_path, "{0}.npy".format(file_names[0])), padded_features)
-    np.save(os.path.join(folder_path, "{0}.npy".format(file_names[1])), transcriptions)
-    np.save(os.path.join(folder_path, "{0}.npy".format(file_names[2])), ids)
+    np.save(saved_file_paths[2], transcriptions)
+    np.save(saved_file_paths[3], ids)
 
+    return saved_file_paths
+
+def _print_download_progress(count, block_size, total_size):
+    """Print the download progress.
+
+    Used as a callback in _maybe_download_and_extract.
+    """
+
+    pct_complete = float(count * block_size) / total_size
+    msg = "\r- Download progress: {0:.1%}".format(pct_complete)
+
+    sys.stdout.write(msg)
+    sys.stdout.flush()
+
+def _maybe_download_and_extract(folder_paths):
+    """Download and extract data if it doesn't exist.
+    
+    Args:
+       folder_paths (list of strings): for instance,
+            path/to/dev-clean
+            path/to/dev-other
+            etc.
+
+    """
+    for folder_path in folder_paths:
+        if not os.path.exists(folder_path):
+            tmp_file_path = folder_path + ".tar.gz"
+            base_name = os.path.basename(folder_path) # e.g. dev-clean, dev-other
+            url = LIBRISPEECH_URL_BASE.format(base_name)
+
+            print ("Folder not found. Downloading {0}".format(base_name))
+
+            file_path, _ = urllib.request.urlretrieve(url=url,
+                                                      filename=tmp_file_path,
+                                                      reporthook=_print_download_progress)
+            print()
+            print("Download complete. Now extracting.")
+            tarfile.open(name=tmp_file_path, mode="r:gz").extractall(folder_path)
 
 class LibriSpeechData:
     def __init__(self, 
@@ -230,6 +282,9 @@ class LibriSpeechData:
         self._label = label
         self._folder_paths = folder_paths
 
+        _maybe_download_and_extract(folder_paths)
+        self._maybe_preprocess()
+
         self.batch_size = batch_size
         self.num_features = num_features
         self.max_input_length = max_time_steps
@@ -239,6 +294,22 @@ class LibriSpeechData:
         # 1 input channel
         self.input_shape = (batch_size, num_features, max_time_steps, 1) 
         self.output_shape = (batch_size, NUM_CHAR_FEATURES, max_output_length)
+
+    def _maybe_preprocess(self):
+        """Preprocess raw LibriSpeech data and save if not already done
+        """
+        for folder_path in self._folder_paths:
+            bn = os.path.basename(folder_path)
+            file_names = ["{0}-mfcc".format(bn),
+                          "{0}-power_banks".format(bn), 
+                          "{0}-".format(bn), 
+                          "{0}-fb".format(bn)]
+
+            self._processed_data_paths = [os.path.join(folder_path, "{0}.npy".format(file_name) for file_name in file_names]
+
+            if any(not os.path.exists(file_path) for file_path in self._processed_data_paths):
+                data = _get_data_from_path(folder_path)
+                _save_data(data, folder_path, file_names)
 
     def _prepare_for_tf(self, inputs, outputs):
         """Prepare inputs and outputs for tensorflow
@@ -263,6 +334,28 @@ class LibriSpeechData:
 
     def batch_generator(self, tf=False, randomize=True):
         """Create a batch generator
+
+        Args:
+            tf (:obj:`bool`, optional): Whether to yield formatted for tensorflow
+            randomize (:obj:`bool`, optional): Whether to randomize 
+
+        Returns:
+            generator : batch generator of mfcc features and labels
+        """
+        if self._feature == "mfcc":
+            self._features = np.load(self._processed_data_paths[0])[:, 1:self._num_features]
+        elif self._feature == "power_bank":
+            self._features = np.load(self._processed_data_paths[1])[:, :self._num_features]
+        else:
+            raise ValueError('Invalid feature')
+        
+        
+
+    def _batch_generator_dep(self, tf=False, randomize=True):
+        """Create a batch generator
+
+        Deprecated version - we preprocess the data and load it now,
+        which allows it to be randomized better.
 
         Args:
             tf (:obj:`bool`, optional): Whether to yield formatted for tensorflow
